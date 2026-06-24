@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+
+<head>
+    <meta charset="UTF-8">
+    <!-- أهم سطر للموبايل: يمنع التكبير/التصغير التلقائي ويظبط العرض -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <title>FCI Knowledge Graph</title>
+
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+
+    <style>
+        /* ====== متغيرات الأحجام (سهلة التعديل) ====== */
+        :root {
+            --panel-width: 400px;
+            --title-size: 20px;
+            --legend-size: 13px;
+        }
+
+        * {
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            margin: 0;
+            background: #111;
+            overflow: hidden;
+            font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+            /* منع التمرير الأفقي على الموبايل */
+            overscroll-behavior: none;
+            -webkit-touch-callout: none;
+        }
+
+        svg {
+            width: 100vw;
+            height: 100vh;
+            cursor: grab;
+            transition: width 0.3s ease, margin 0.3s ease;
+            /* منع تحديد النص عند السحب باللمس */
+            -webkit-user-select: none;
+            user-select: none;
+            touch-action: none;
+        }
+
+        svg:active {
+            cursor: grabbing;
+        }
+
+        /* ====== الكمبيوتر: لما البانل يفتح، الـ SVG يتزحلق ====== */
+        @media (min-width: 769px) {
+            svg.with-panel {
+                width: calc(100vw - var(--panel-width));
+                margin-left: var(--panel-width);
+            }
+        }
+
+        /* ====== العنوان ====== */
+        #title {
+            position: fixed;
+            top: 14px;
+            right: 18px;
+            color: #fff;
+            font-size: var(--title-size);
+            font-weight: bold;
+            text-shadow: 0 2px 6px #000;
+            pointer-events: none;
+            z-index: 10;
+            max-width: 60vw;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* ====== التلميح ====== */
+        #hint {
+            position: fixed;
+            bottom: 12px;
+            right: 18px;
+            color: #aaa;
+            font-size: 12px;
+            pointer-events: none;
+            z-index: 10;
+            background: rgba(0, 0, 0, 0.4);
+            padding: 6px 12px;
+            border-radius: 6px;
+            max-width: 70vw;
+        }
+
+        /* ====== الـ legend ====== */
+        #legend {
+            position: fixed;
+            top: 52px;
+            right: 18px;
+            background: rgba(0, 0, 0, 0.55);
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 10px 14px;
+            color: #eee;
+            font-size: var(--legend-size);
+            z-index: 10;
+            max-height: calc(100vh - 140px);
+            overflow-y: auto;
+        }
+
+        .legend-row {
+            display: flex;
+            align-items: center;
+            margin: 4px 0;
+        }
+
+        .legend-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-left: 8px;
+            display: inline-block;
+            flex-shrink: 0;
+        }
+
+        /* ====== الـ tooltip ====== */
+        .tooltip {
+            position: absolute;
+            max-width: 220px;
+            text-align: right;
+            direction: rtl;
+            padding: 8px 11px;
+            font-size: 12px;
+            background: rgba(20, 20, 20, 0.92);
+            color: #fff;
+            border: 1px solid #444;
+            border-radius: 6px;
+            pointer-events: none;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
+            line-height: 1.6;
+            z-index: 100;
+        }
+
+        /* ====== البانل الجانبي لعرض محتوى المادة ====== */
+        #detail-panel {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: var(--panel-width);
+            max-width: 100vw;
+            height: 100vh;
+            background: #181818;
+            border-right: 1px solid #333;
+            box-shadow: 6px 0 30px rgba(0, 0, 0, 0.7);
+            transform: translateX(-100%);
+            transition: transform 0.3s ease;
+            z-index: 50;
+            overflow-y: auto;
+            padding: 28px 26px;
+            box-sizing: border-box;
+            color: #eee;
+            direction: rtl;
+            text-align: right;
+            /* سكرول ناعم على iOS */
+            -webkit-overflow-scrolling: touch;
+        }
+
+        #detail-panel.open {
+            transform: translateX(0);
+        }
+
+        #detail-panel .close-btn {
+            position: absolute;
+            top: 14px;
+            left: 14px;
+            background: transparent;
+            border: none;
+            color: #aaa;
+            font-size: 32px;
+            cursor: pointer;
+            line-height: 1;
+            padding: 4px 12px;
+            border-radius: 6px;
+            transition: background 0.2s, color 0.2s;
+            /* مساحة لمس أكبر للموبايل */
+            min-width: 44px;
+            min-height: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #detail-panel .close-btn:hover,
+        #detail-panel .close-btn:active {
+            background: #333;
+            color: #fff;
+        }
+
+        #detail-panel .breadcrumb {
+            color: #888;
+            font-size: 13px;
+            margin-bottom: 8px;
+        }
+
+        #detail-panel .detail-title {
+            font-size: 28px;
+            font-weight: bold;
+            margin: 0 0 14px;
+            line-height: 1.3;
+            word-wrap: break-word;
+        }
+
+        #detail-panel .detail-desc {
+            font-size: 15px;
+            line-height: 1.9;
+            color: #ccc;
+            margin-bottom: 10px;
+        }
+
+        #detail-panel .detail-section-title {
+            font-size: 15px;
+            font-weight: bold;
+            color: #4fc3f7;
+            margin: 22px 0 10px;
+            border-bottom: 1px solid #333;
+            padding-bottom: 6px;
+        }
+
+        #detail-panel .content-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        #detail-panel .content-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            background: #222;
+            border: 1px solid #2e2e2e;
+            border-radius: 8px;
+            padding: 10px 12px;
+        }
+
+        #detail-panel .content-num {
+            background: #2a2a2a;
+            border: 1px solid #444;
+            color: #4fc3f7;
+            min-width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 13px;
+            font-weight: bold;
+            flex-shrink: 0;
+        }
+
+        #detail-panel .content-item-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #eee;
+            margin-bottom: 2px;
+        }
+
+        #detail-panel .content-item-desc {
+            font-size: 13px;
+            color: #aaa;
+            line-height: 1.6;
+        }
+
+        #detail-panel .content-empty {
+            color: #888;
+            font-size: 14px;
+            font-style: italic;
+            padding: 12px;
+            background: #1e1e1e;
+            border-radius: 8px;
+            border: 1px dashed #444;
+        }
+
+        #detail-panel .prereq-tag {
+            display: inline-block;
+            background: #2a2a2a;
+            border: 1px solid #444;
+            color: #ddd;
+            padding: 6px 14px;
+            border-radius: 6px;
+            font-size: 12px;
+            margin: 0 0 6px 6px;
+            cursor: pointer;
+            transition: background 0.2s, border-color 0.2s;
+            /* مساحة لمس أكبر */
+            min-height: 32px;
+            display: inline-flex;
+            align-items: center;
+        }
+
+        #detail-panel .prereq-tag:hover,
+        #detail-panel .prereq-tag:active {
+            background: #383838;
+            border-color: #4fc3f7;
+        }
+
+        /* ====== الموبايل (أقل من 768px) ====== */
+        @media (max-width: 768px) {
+            :root {
+                --title-size: 16px;
+                --legend-size: 11px;
+            }
+
+            /* البانل يغطي الشاشة كلها على الموبايل */
+            #detail-panel {
+                width: 100vw;
+            }
+
+            /* على الموبايل، الـ SVG مبيتحركش لما البانل يفتح (البانل بيلغي فوقه) */
+            svg.with-panel {
+                width: 100vw;
+                margin-left: 0;
+            }
+
+            /* الـ legend يبقى صغير ومضغوط */
+            #legend {
+                top: 46px;
+                right: 10px;
+                padding: 6px 10px;
+                max-height: 30vh;
+            }
+
+            #title {
+                top: 10px;
+                right: 12px;
+                max-width: 70vw;
+            }
+
+            #hint {
+                right: 10px;
+                left: 10px;
+                bottom: 8px;
+                font-size: 10px;
+                text-align: center;
+                max-width: none;
+                width: calc(100vw - 20px);
+            }
+
+            #detail-panel .detail-title {
+                font-size: 22px;
+            }
+        }
+
+        /* ====== التابلت العمودي (768px - 1024px) ====== */
+        @media (min-width: 769px) and (max-width: 1024px) {
+            :root {
+                --panel-width: 340px;
+            }
+        }
+
+        /* ====== الوضع الأفقي للموبايل ====== */
+        @media (max-width: 768px) and (orientation: landscape) {
+            :root {
+                --panel-width: 320px;
+            }
+
+            #detail-panel {
+                width: 320px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="title">خريطة مواد كلية الحاسبات ومعلومات</div>
+    <div id="legend"></div>
+    <div id="hint">اضغط على أي مادة لعرض محتواها • مرر الماوس لإبراز العلاقات • اسحب العقدة • عجلة الفأرة للتكبير</div>
+
+    <svg></svg>
+
+    <!-- البانل الجانبي لعرض محتوى المادة -->
+    <div id="detail-panel">
+        <div id="detail-content"></div>
+    </div>
+
+    <script src="graph.js"></script>
+
+</body>
+
+</html>
