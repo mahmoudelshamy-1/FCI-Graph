@@ -1,258 +1,284 @@
-const svg = d3.select("svg");
+// ====== FCI Knowledge Graph (Graphviz + JustinMath style) ======
 
-const width = window.innerWidth;
-const height = window.innerHeight;
-
-// ألوان كل مجموعة (سنة / تخصص / مشترك)
-const color = d3.scaleOrdinal()
-    .domain(["Year1", "Year2", "IT", "IS", "CS", "Shared"])
-    .range(["#e74c3c", "#9b59b6", "#2ecc71", "#f1c40f", "#3498db", "#1abc9c"]);
-
-// الطبقة القابلة للتكبير / التحريك
-const g = svg.append("g");
-const zoom = d3.zoom()
-    .scaleExtent([0.2, 4])
-    .on("zoom", (event) => g.attr("transform", event.transform));
-svg.call(zoom);
-
-// صندوق الوصف السريع عند الـ hover
-const tooltip = d3.select("body").append("div")
-    .attr("class", "tooltip")
-    .style("opacity", 0);
-
-// الـ legend
-const legendData = [
-    { group: "Year1",  label: "السنة الأولى" },
-    { group: "Year2",  label: "السنة الثانية" },
-    { group: "IT",     label: "تكنولوجيا المعلومات" },
-    { group: "IS",     label: "نظم المعلومات" },
-    { group: "CS",     label: "علوم الحاسب" },
-    { group: "Shared", label: "مواد مشتركة" }
-];
-const legendBox = d3.select("#legend");
-legendData.forEach(d => {
-    const row = legendBox.append("div").attr("class", "legend-row");
-    row.append("span").attr("class", "legend-dot").style("background", color(d.group));
-    row.append("span").text(d.label);
-});
-
-// أسماء المجموعات بالعربي للبانل
-const groupLabels = {
-    "Year1": "السنة الأولى", "Year2": "السنة الثانية",
-    "IT": "تكنولوجيا المعلومات", "IS": "نظم المعلومات",
-    "CS": "علوم الحاسب", "Shared": "مادة مشتركة"
+// ألوان باستيل فاتحة زي JustinMath بالظبط
+const COLORS = {
+    Year1:  '#ffdbdb',  // أحمر فاتح
+    Year2:  '#c9e4ff',  // أزرق فاتح
+    IT:     '#bdffc8',  // أخضر فاتح
+    IS:     '#ffe19c',  // برتقالي فاتح
+    CS:     '#f0c9ff',  // بنفسجي فاتح
+    Shared: '#b0fff6'   // تركواز فاتح
 };
 
-// حجم الكور بيعتمد على طول اسم المادة (عشان الاسم يتسع جواها)
-function nodeRadius(d) {
-    return Math.max(32, d.id.length * 4.2 + 14);
+const GROUP_LABELS = {
+    Year1:  'السنة الأولى',
+    Year2:  'السنة الثانية',
+    IT:     'تكنولوجيا المعلومات',
+    IS:     'نظم المعلومات',
+    CS:     'علوم الحاسب',
+    Shared: 'مواد مشتركة'
+};
+
+let graphData = null;
+let nodeById = {};
+let dotSrc = '';
+let selectedId = null;
+
+// ===== بناء الـ legend =====
+function buildLegend() {
+    const box = document.getElementById('legend-items');
+    box.innerHTML = Object.keys(COLORS).map(g =>
+        `<div class="legend-row">
+            <span class="legend-dot" style="background:${COLORS[g]}"></span>
+            <span>${GROUP_LABELS[g]}</span>
+        </div>`
+    ).join('');
 }
 
-d3.json("graph.json").then(data => {
+// ===== تحويل النص لآمن لـ Graphviz DOT (escaping) =====
+function esc(s) {
+    return String(s)
+        .replace(/\\/g, '\\\\')
+        .replace(/"/g, '\\"')
+        .replace(/&/g, '&amp;');
+}
 
-    const nodeById = {};
-    data.nodes.forEach(n => nodeById[n.id] = n);
+// ===== تحويل النص لآمن لـ HTML =====
+function escHtml(s) {
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
 
-    // مجموعات الرسم
-    const linkG  = g.append("g").attr("class", "links");
-    const nodeG  = g.append("g").attr("class", "nodes");
-    const labelG = g.append("g").attr("class", "labels");
+// ===== تحويل النص لآمن لـ JavaScript string (onclick) =====
+function escJs(s) {
+    return String(s)
+        .replace(/\\/g, '\\\\')
+        .replace(/'/g, "\\'")
+        .replace(/"/g, '\\"');
+}
 
-    const simulation = d3.forceSimulation(data.nodes)
-        .force("link", d3.forceLink(data.links).id(d => d.id)
-            .distance(d => (nodeRadius(d.source) + nodeRadius(d.target)) * 1.1)
-            .strength(0.35))
-        .force("charge", d3.forceManyBody().strength(-1500))
-        .force("center", d3.forceCenter(width / 2, height / 2))
-        .force("collide", d3.forceCollide().radius(d => nodeRadius(d) + 8))
-        .force("x", d3.forceX(width / 2).strength(0.04))
-        .force("y", d3.forceY(height / 2).strength(0.04));
+// ===== طي النص الطويل لسطور متعددة =====
+function wrapLabel(text, maxChars = 18) {
+    const words = String(text).split(' ');
+    let result = '', line = '';
+    for (let w of words) {
+        if ((line + ' ' + w).trim().length > maxChars) {
+            result += line.trim() + '\\n';
+            line = w;
+        } else {
+            line += ' ' + w;
+        }
+    }
+    result += line.trim();
+    return result;
+}
 
-    simulation.on("tick", () => {
-        linkG.selectAll("line")
-            .attr("x1", d => d.source.x).attr("y1", d => d.source.y)
-            .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
-        nodeG.selectAll("circle")
-            .attr("cx", d => d.x).attr("cy", d => d.y);
-        labelG.selectAll("text")
-            .attr("x", d => d.x).attr("y", d => d.y);
+// ===== Attributer: ضبط أبعاد الـ SVG (زي JustinMath بالظبط) =====
+function attributer(datum, index, nodes) {
+    if (datum.tag === "svg") {
+        var graphEl = document.getElementById("graph");
+        var width = graphEl.clientWidth || graphEl.offsetWidth || 800;
+        var height = graphEl.clientHeight || graphEl.offsetHeight || 600;
+        datum.attributes.width = width;
+        datum.attributes.height = height;
+    }
+}
+
+// ===== بناء DOT من graph.json =====
+function buildDot() {
+    const lines = [];
+    // إعدادات الجراف (أتربيوت واحدة في براكيت واحد — صيغة DOT الصحيحة)
+    lines.push('digraph {');
+    lines.push('  graph [rankdir=BT, newrank=true, overlap=false, nodesep=0.4, ranksep=0.9, splines=true, bgcolor="transparent", dpi=72];');
+    lines.push('  node [shape=ellipse, style="filled", fontname="Segoe UI", fontsize=14, fontcolor="#1a1a1a", penwidth=0, color="#333"];');
+    lines.push('  edge [arrowsize=1.2, color="#666", penwidth=1.1];');
+
+    // العقد
+    graphData.nodes.forEach(n => {
+        const fill = COLORS[n.group] || '#e3e3e3';
+        const label = wrapLabel(n.id);
+        const desc = n.desc ? ` tooltip="${esc(n.desc)}"` : '';
+        lines.push(`  "${esc(n.id)}" [label="${label}", fillcolor="${fill}"${desc}];`);
     });
 
-    // ----- الروابط -----
-    linkG.selectAll("line")
-        .data(data.links)
-        .enter().append("line")
-        .attr("stroke", "#666")
-        .attr("stroke-opacity", 0.5)
-        .attr("stroke-width", 1.6);
+    // الروابط
+    graphData.links.forEach(l => {
+        lines.push(`  "${esc(l.source)}" -> "${esc(l.target)}";`);
+    });
 
-    // ----- الكور -----
-    const node = nodeG.selectAll("circle")
-        .data(data.nodes)
-        .enter().append("circle")
-        .attr("r", nodeRadius)
-        .attr("fill", d => color(d.group))
-        .attr("fill-opacity", 0.9)
-        .attr("stroke", "#fff")
-        .attr("stroke-width", 2)
-        .style("cursor", "pointer")
-        .style("transition", "transform 0.2s ease")
-        .on("mouseover", function (event, d) {
-            d3.select(this).attr("stroke-width", 4);
-            showTooltip(event, d);
-            fade(0.15)(event, d);
-        })
-        .on("mousemove", moveTooltip)
-        .on("mouseout", function (event, d) {
-            d3.select(this).attr("stroke-width", 2);
-            tooltip.transition().duration(200).style("opacity", 0);
-            fade(1)(event, d);
-        })
-        .on("click", function (event, d) {
-            openPanel(d);
-        })
-        .call(d3.drag()
-            .on("start", dragStart)
-            .on("drag", dragDrag)
-            .on("end", dragEnd));
+    lines.push('}');
+    return lines.join('\n');
+}
 
-    // ----- التسميات (الاسم جوه الكورة) -----
-    // حجم الخط بيكبر ويصغر مع حجم الكورة
-    labelG.selectAll("text")
-        .data(data.nodes)
-        .enter().append("text")
-        .attr("class", "node-label")
-        .text(d => d.id)
-        .each(function (d) {
-            // نضبط حجم الخط حسب نصف قطر الكورة ونطوى الاسم لو طويل
-            const r = nodeRadius(d);
-            let fontSize = Math.max(9, r * 0.36);
-            // لو الاسم أطول من قطر الكورة، نصغر الخط لحد ما يتسع
-            const maxChars = Math.floor((r * 2) / (fontSize * 0.58));
-            if (d.id.length > maxChars) {
-                fontSize = Math.max(8, (r * 2) / (d.id.length * 0.58));
+// ===== إعادة رسم الجراف =====
+function renderGraph() {
+    dotSrc = buildDot();
+    d3.select("#graph")
+        .graphviz()
+        .attributer(attributer)
+        .transition(function () {
+            return d3.transition().duration(400);
+        })
+        .logEvents(false)
+        .renderDot(dotSrc)
+        .on("end", function () {
+            attachInteractions();
+        });
+}
+
+// ===== ربط التفاعلات بعد الرسم =====
+function attachInteractions() {
+    d3.selectAll('.node').on('click', function () {
+        const title = d3.select(this).select('title').text();
+        selectNode(title);
+    });
+}
+
+// ===== تحديد عقدة + إبراز مسار المتطلبات =====
+function selectNode(id) {
+    selectedId = id;
+    const node = nodeById[id];
+    if (!node) return;
+
+    updateInfoPanel(node);
+    highlightPath(id);
+}
+
+// ===== إبراز مسار المتطلبات (من الأجداد للمادة) =====
+function highlightPath(id) {
+    // إعادة الكل للطبيعي
+    d3.select("#graph svg").selectAll('.node').each(function () {
+        d3.select(this).select('ellipse')
+            .attr('stroke-width', 0)
+            .attr('stroke', '#333');
+    });
+    d3.select("#graph svg").selectAll('.edge').each(function () {
+        d3.select(this).select('path')
+            .attr('stroke', '#666')
+            .attr('stroke-width', 1.1);
+        d3.select(this).select('polygon')
+            .attr('stroke', '#666')
+            .attr('fill', '#666');
+    });
+
+    // تجميع كل الأجداد (Prerequisites) صعوداً
+    const ancestors = new Set([id]);
+    const queue = [id];
+    while (queue.length) {
+        const cur = queue.shift();
+        graphData.links.forEach(l => {
+            const s = typeof l.source === 'object' ? l.source.id : l.source;
+            const t = typeof l.target === 'object' ? l.target.id : l.target;
+            if (t === cur && !ancestors.has(s)) {
+                ancestors.add(s);
+                queue.push(s);
             }
-            d3.select(this).attr("font-size", fontSize);
-        })
-        .attr("text-anchor", "middle")
-        .attr("dy", "0.34em")
-        .attr("fill", "#fff")
-        .attr("font-weight", "bold")
-        .attr("font-family", "Segoe UI, Tahoma, Arial, sans-serif")
-        .style("pointer-events", "none")
-        .style("paint-order", "stroke")
-        .attr("stroke", "rgba(0,0,0,0.5)")
-        .attr("stroke-width", "0.5px")
-        .attr("paint-order", "stroke");
-
-    // إبراز الجيران عند الـ hover
-    function fade(opacity) {
-        return (event, d) => {
-            const neighbors = new Set([d.id]);
-            data.links.forEach(l => {
-                if (l.source.id === d.id) neighbors.add(l.target.id);
-                if (l.target.id === d.id) neighbors.add(l.source.id);
-            });
-            nodeG.selectAll("circle").style("opacity", o => neighbors.has(o.id) ? 1 : opacity);
-            labelG.selectAll("text").style("opacity", o => neighbors.has(o.id) ? 1 : opacity);
-            linkG.selectAll("line").style("stroke-opacity", o =>
-                (o.source.id === d.id || o.target.id === d.id) ? 0.9 : opacity * 0.3);
-        };
-    }
-
-    function showTooltip(event, d) {
-        tooltip.transition().duration(120).style("opacity", 0.95);
-        tooltip.html(`<b>${d.id}</b>${d.desc ? `<br/>${d.desc}` : ""}`)
-            .style("left", (event.pageX + 14) + "px")
-            .style("top", (event.pageY - 30) + "px");
-    }
-    function moveTooltip(event) {
-        tooltip.style("left", (event.pageX + 14) + "px").style("top", (event.pageY - 30) + "px");
-    }
-
-    // ====== البانل الجانبي لعرض محتوى المادة ======
-    function openPanel(d) {
-        const panel = document.getElementById("detail-panel");
-        const content = document.getElementById("detail-content");
-
-        // المتطلبات السابقة (الجيران اللي مرتبطة بالمادة)
-        const prereqs = [];
-        data.links.forEach(l => {
-            if (l.target.id === d.id) prereqs.push(l.source.id);
         });
-        const unlocks = [];
-        data.links.forEach(l => {
-            if (l.source.id === d.id) unlocks.push(l.target.id);
-        });
-
-        const items = d.content || [];
-        const hasContent = items.length > 0;
-
-        content.innerHTML = `
-            <button class="close-btn" onclick="closePanel()">×</button>
-            <div class="breadcrumb">${groupLabels[d.group] || ""}</div>
-            <h2 class="detail-title">${d.id}</h2>
-            ${d.desc ? `<div class="detail-desc">${d.desc}</div>` : ""}
-
-            ${hasContent ? `
-                <div class="detail-section-title">محتوى المادة</div>
-                <div class="content-list">
-                    ${items.map((it, i) => `
-                        <div class="content-item">
-                            <span class="content-num">${i + 1}</span>
-                            <div>
-                                <div class="content-item-title">${it.title}</div>
-                                ${it.desc ? `<div class="content-item-desc">${it.desc}</div>` : ""}
-                            </div>
-                        </div>
-                    `).join("")}
-                </div>
-            ` : `
-                <div class="detail-section-title">محتوى المادة</div>
-                <div class="content-empty">سيتم إضافة محتوى هذه المادة قريباً.</div>
-            `}
-
-            ${prereqs.length ? `
-                <div class="detail-section-title">المتطلبات السابقة</div>
-                <div>
-                    ${prereqs.map(p => `<span class="prereq-tag" onclick="focusNode('${p}')">${p}</span>`).join("")}
-                </div>
-            ` : ""}
-
-            ${unlocks.length ? `
-                <div class="detail-section-title">يؤهلك لدراسة</div>
-                <div>
-                    ${unlocks.map(u => `<span class="prereq-tag" onclick="focusNode('${u}')">${u}</span>`).join("")}
-                </div>
-            ` : ""}
-        `;
-
-        panel.classList.add("open");
-        document.querySelector("svg").classList.add("with-panel");
     }
 
-    function closePanel() {
-        const panel = document.getElementById("detail-panel");
-        panel.classList.remove("open");
-        document.querySelector("svg").classList.remove("with-panel");
+    // إبراز العقد في المسار
+    d3.select("#graph svg").selectAll('.node').each(function () {
+        const nid = d3.select(this).select('title').text();
+        if (ancestors.has(nid)) {
+            d3.select(this).select('ellipse')
+                .attr('fill', '#f6ff4f')
+                .attr('stroke', '#d4a017')
+                .attr('stroke-width', nid === id ? 3 : 1.5);
+        }
+    });
+
+    // إبراز حواف المسار
+    d3.select("#graph svg").selectAll('.edge').each(function () {
+        const title = d3.select(this).select('title').text();
+        const [src, tgt] = title.split('->');
+        if (ancestors.has(src.trim()) && ancestors.has(tgt.trim())) {
+            d3.select(this).select('path')
+                .attr('stroke', '#d4a017')
+                .attr('stroke-width', 2.5);
+            d3.select(this).select('polygon')
+                .attr('stroke', '#d4a017')
+                .attr('fill', '#d4a017');
+        }
+    });
+}
+
+// ===== تحديث محتوى السايدبار =====
+function updateInfoPanel(node) {
+    const titleEl = document.getElementById('infoPanel-title');
+    const bodyEl = document.getElementById('infoPanel-body');
+
+    // المتطلبات السابقة + المواد التالية
+    const prereqs = [];
+    const unlocks = [];
+    graphData.links.forEach(l => {
+        const s = typeof l.source === 'object' ? l.source.id : l.source;
+        const t = typeof l.target === 'object' ? l.target.id : l.target;
+        if (t === node.id) prereqs.push(s);
+        if (s === node.id) unlocks.push(t);
+    });
+
+    titleEl.innerHTML = escHtml(node.id);
+
+    let html = '';
+    if (node.desc) {
+        html += `<div id="infoPanel-desc">${node.desc}</div>`;
     }
 
-    function focusNode(id) {
-        const found = data.nodes.find(n => n.id === id);
-        if (found) openPanel(found);
+    // المتطلبات السابقة
+    if (prereqs.length) {
+        html += `<div class="info-section">
+            <div class="info-section-title">⬅️ المتطلبات السابقة</div>
+            <div>${prereqs.map(p => `<span class="pill" onclick="selectNode('${escJs(p)}')">${escHtml(p)}</span>`).join('')}</div>
+        </div>`;
     }
 
-    window.closePanel = closePanel;
-    window.focusNode = focusNode;
+    // المواد التالية
+    if (unlocks.length) {
+        html += `<div class="info-section">
+            <div class="info-section-title">➡️ يؤهلك لدراسة</div>
+            <div>${unlocks.map(u => `<span class="pill" onclick="selectNode('${escJs(u)}')">${escHtml(u)}</span>`).join('')}</div>
+        </div>`;
+    }
 
-    // سحب العقد
-    function dragStart(event, d) {
-        if (!event.active) simulation.alphaTarget(0.3).restart();
-        d.fx = d.x; d.fy = d.y;
-    }
-    function dragDrag(event, d) { d.fx = event.x; d.fy = event.y; }
-    function dragEnd(event, d) {
-        if (!event.active) simulation.alphaTarget(0);
-        d.fx = null; d.fy = null;
-    }
+    // محتوى المادة (فاضي دلوقتي — هيتضاف بكره)
+    html += `<div class="info-section">
+        <div class="info-section-title">📚 محتوى المادة</div>
+        <div class="content-empty">سيتم إضافة محتوى هذه المادة قريباً.</div>
+    </div>`;
+
+    bodyEl.innerHTML = html;
+}
+
+// ===== إعادة ضبط العرض =====
+function resetView() {
+    selectedId = null;
+    renderGraph();
+    document.getElementById('infoPanel-title').innerHTML = 'خريطة المواد';
+    document.getElementById('infoPanel-body').innerHTML =
+        '<div style="text-align:center; color:#888; margin-top:40px;">👆 اضغط على أي مادة لعرض تفاصيلها</div>';
+}
+
+function toggleLegend() {
+    const lg = document.getElementById('legend');
+    lg.style.display = lg.style.display === 'none' ? 'block' : 'none';
+}
+
+// ===== البدء =====
+window.selectNode = selectNode;
+window.resetView = resetView;
+window.toggleLegend = toggleLegend;
+
+buildLegend();
+
+d3.json("graph.json").then(function (data) {
+    graphData = data;
+    data.nodes.forEach(function (n) { nodeById[n.id] = n; });
+    renderGraph();
+}).catch(function (err) {
+    document.getElementById('graph').innerHTML =
+        '<div style="padding:40px;color:#c00;">تعذر تحميل graph.json — تأكد من تشغيل السيرفر المحلي</div>';
+    console.error(err);
 });

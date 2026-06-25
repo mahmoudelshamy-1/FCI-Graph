@@ -3,383 +3,226 @@
 
 <head>
     <meta charset="UTF-8">
-    <!-- أهم سطر للموبايل: يمنع التكبير/التصغير التلقائي ويظبط العرض -->
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
     <title>FCI Knowledge Graph</title>
 
+    <!-- Graphviz + D3 (نفس مكتبات JustinMath بالظبط) -->
     <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://unpkg.com/viz.js@1.8.0/viz.js" type="javascript/worker"></script>
+    <script src="https://unpkg.com/d3-graphviz@2.6.1/build/d3-graphviz.min.js"></script>
 
     <style>
-        /* ====== متغيرات الأحجام (سهلة التعديل) ====== */
-        :root {
-            --panel-width: 400px;
-            --title-size: 20px;
-            --legend-size: 13px;
-        }
-
-        * {
-            box-sizing: border-box;
-            -webkit-tap-highlight-color: transparent;
-        }
-
+        * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        html, body { height: 100%; overflow: hidden; }
         body {
-            margin: 0;
-            background: #111;
-            overflow: hidden;
             font-family: "Segoe UI", Tahoma, Arial, sans-serif;
-            /* منع التمرير الأفقي على الموبايل */
-            overscroll-behavior: none;
-            -webkit-touch-callout: none;
-        }
-
-        svg {
-            width: 100vw;
-            height: 100vh;
-            cursor: grab;
-            transition: width 0.3s ease, margin 0.3s ease;
-            /* منع تحديد النص عند السحب باللمس */
-            -webkit-user-select: none;
-            user-select: none;
-            touch-action: none;
-        }
-
-        svg:active {
-            cursor: grabbing;
-        }
-
-        /* ====== الكمبيوتر: لما البانل يفتح، الـ SVG يتزحلق ====== */
-        @media (min-width: 769px) {
-            svg.with-panel {
-                width: calc(100vw - var(--panel-width));
-                margin-left: var(--panel-width);
-            }
-        }
-
-        /* ====== العنوان ====== */
-        #title {
-            position: fixed;
-            top: 14px;
-            right: 18px;
-            color: #fff;
-            font-size: var(--title-size);
-            font-weight: bold;
-            text-shadow: 0 2px 6px #000;
-            pointer-events: none;
-            z-index: 10;
-            max-width: 60vw;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        /* ====== التلميح ====== */
-        #hint {
-            position: fixed;
-            bottom: 12px;
-            right: 18px;
-            color: #aaa;
-            font-size: 12px;
-            pointer-events: none;
-            z-index: 10;
-            background: rgba(0, 0, 0, 0.4);
-            padding: 6px 12px;
-            border-radius: 6px;
-            max-width: 70vw;
-        }
-
-        /* ====== الـ legend ====== */
-        #legend {
-            position: fixed;
-            top: 52px;
-            right: 18px;
-            background: rgba(0, 0, 0, 0.55);
-            border: 1px solid #333;
-            border-radius: 8px;
-            padding: 10px 14px;
-            color: #eee;
-            font-size: var(--legend-size);
-            z-index: 10;
-            max-height: calc(100vh - 140px);
-            overflow-y: auto;
-        }
-
-        .legend-row {
             display: flex;
-            align-items: center;
-            margin: 4px 0;
+            background: #ffffff;
         }
 
-        .legend-dot {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            margin-left: 8px;
-            display: inline-block;
+        /* ===== السايدبار (يسار، زي JustinMath بالظبط) ===== */
+        #infoPanel {
+            width: 40%;
+            max-width: 480px;
+            height: 100%;
+            background: #f4f4f4;
+            border-left: 1px solid #999;
+            overflow-y: auto;
+            padding: 18px 22px;
             flex-shrink: 0;
-        }
-
-        /* ====== الـ tooltip ====== */
-        .tooltip {
-            position: absolute;
-            max-width: 220px;
-            text-align: right;
-            direction: rtl;
-            padding: 8px 11px;
-            font-size: 12px;
-            background: rgba(20, 20, 20, 0.92);
-            color: #fff;
-            border: 1px solid #444;
-            border-radius: 6px;
-            pointer-events: none;
-            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
-            line-height: 1.6;
-            z-index: 100;
-        }
-
-        /* ====== البانل الجانبي لعرض محتوى المادة ====== */
-        #detail-panel {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: var(--panel-width);
-            max-width: 100vw;
-            height: 100vh;
-            background: #181818;
-            border-right: 1px solid #333;
-            box-shadow: 6px 0 30px rgba(0, 0, 0, 0.7);
-            transform: translateX(-100%);
-            transition: transform 0.3s ease;
-            z-index: 50;
-            overflow-y: auto;
-            padding: 28px 26px;
-            box-sizing: border-box;
-            color: #eee;
             direction: rtl;
             text-align: right;
-            /* سكرول ناعم على iOS */
             -webkit-overflow-scrolling: touch;
+            transition: transform 0.3s ease;
         }
-
-        #detail-panel.open {
-            transform: translateX(0);
-        }
-
-        #detail-panel .close-btn {
-            position: absolute;
-            top: 14px;
-            left: 14px;
-            background: transparent;
-            border: none;
-            color: #aaa;
-            font-size: 32px;
-            cursor: pointer;
-            line-height: 1;
-            padding: 4px 12px;
-            border-radius: 6px;
-            transition: background 0.2s, color 0.2s;
-            /* مساحة لمس أكبر للموبايل */
-            min-width: 44px;
-            min-height: 44px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        #detail-panel .close-btn:hover,
-        #detail-panel .close-btn:active {
-            background: #333;
-            color: #fff;
-        }
-
-        #detail-panel .breadcrumb {
-            color: #888;
-            font-size: 13px;
-            margin-bottom: 8px;
-        }
-
-        #detail-panel .detail-title {
-            font-size: 28px;
+        #infoPanel-title {
+            font-size: 130%;
             font-weight: bold;
-            margin: 0 0 14px;
-            line-height: 1.3;
-            word-wrap: break-word;
+            text-align: center;
+            padding: 10px 0 12px;
+            border-bottom: 2px solid #555;
         }
-
-        #detail-panel .detail-desc {
-            font-size: 15px;
-            line-height: 1.9;
-            color: #ccc;
+        #infoPanel-cat {
+            text-align: center;
+            font-size: 85%;
+            color: #666;
+            margin-top: -6px;
             margin-bottom: 10px;
         }
-
-        #detail-panel .detail-section-title {
-            font-size: 15px;
-            font-weight: bold;
-            color: #4fc3f7;
-            margin: 22px 0 10px;
-            border-bottom: 1px solid #333;
-            padding-bottom: 6px;
-        }
-
-        #detail-panel .content-list {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        #detail-panel .content-item {
-            display: flex;
-            align-items: flex-start;
-            gap: 10px;
-            background: #222;
-            border: 1px solid #2e2e2e;
+        #infoPanel-desc {
+            background: #fff;
+            border: 1px solid #ddd;
             border-radius: 8px;
-            padding: 10px 12px;
+            padding: 12px 14px;
+            margin: 12px 0;
+            font-size: 95%;
+            line-height: 1.9;
+            color: #333;
         }
-
-        #detail-panel .content-num {
-            background: #2a2a2a;
-            border: 1px solid #444;
-            color: #4fc3f7;
-            min-width: 26px;
-            height: 26px;
+        .info-section {
+            margin-top: 16px;
+        }
+        .info-section-title {
+            font-size: 100%;
+            font-weight: bold;
+            border-bottom: 1px solid #aaa;
+            padding-bottom: 5px;
+            margin-bottom: 8px;
+            color: #2c3e50;
+        }
+        .pill {
+            display: inline-block;
+            background: #e8e8e8;
+            border: 1px solid #ccc;
+            color: #333;
+            padding: 5px 12px;
+            border-radius: 16px;
+            font-size: 85%;
+            margin: 0 0 5px 5px;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        .pill:hover { background: #d4d4d4; border-color: #888; }
+        .content-item {
+            display: flex;
+            gap: 10px;
+            background: #fff;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            padding: 9px 11px;
+            margin-bottom: 6px;
+        }
+        .content-num {
+            background: #eaeaea;
+            color: #444;
+            min-width: 24px;
+            height: 24px;
             border-radius: 50%;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            font-size: 13px;
+            font-size: 85%;
             font-weight: bold;
             flex-shrink: 0;
         }
-
-        #detail-panel .content-item-title {
-            font-size: 14px;
-            font-weight: 600;
-            color: #eee;
-            margin-bottom: 2px;
-        }
-
-        #detail-panel .content-item-desc {
-            font-size: 13px;
-            color: #aaa;
-            line-height: 1.6;
-        }
-
-        #detail-panel .content-empty {
-            color: #888;
-            font-size: 14px;
+        .content-empty {
+            color: #999;
             font-style: italic;
-            padding: 12px;
-            background: #1e1e1e;
-            border-radius: 8px;
-            border: 1px dashed #444;
-        }
-
-        #detail-panel .prereq-tag {
-            display: inline-block;
-            background: #2a2a2a;
-            border: 1px solid #444;
-            color: #ddd;
-            padding: 6px 14px;
+            padding: 10px;
+            background: #fafafa;
+            border: 1px dashed #ccc;
             border-radius: 6px;
-            font-size: 12px;
-            margin: 0 0 6px 6px;
-            cursor: pointer;
-            transition: background 0.2s, border-color 0.2s;
-            /* مساحة لمس أكبر */
-            min-height: 32px;
-            display: inline-flex;
+            font-size: 90%;
+        }
+
+        /* ===== الجراف (يمين) ===== */
+        #graph {
+            flex: 1;
+            height: 100%;
+            position: relative;
+            background: #ffffff;
+        }
+        #graph svg {
+            width: 100%;
+            height: 100%;
+            cursor: grab;
+            display: block;
+        }
+        #graph svg:active { cursor: grabbing; }
+
+        /* ===== العنوان العلوي ===== */
+        #topbar {
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            display: flex;
             align-items: center;
+            gap: 8px;
+            padding: 10px 14px;
+            pointer-events: none;
+            background: linear-gradient(180deg, rgba(255,255,255,0.9), rgba(255,255,255,0));
+            z-index: 10;
         }
-
-        #detail-panel .prereq-tag:hover,
-        #detail-panel .prereq-tag:active {
-            background: #383838;
-            border-color: #4fc3f7;
+        #topbar > * { pointer-events: auto; }
+        #title {
+            font-size: 16px;
+            font-weight: bold;
+            color: #222;
+            text-shadow: 0 1px 3px rgba(255,255,255,0.8);
+            white-space: nowrap;
         }
+        #reset-btn, #legend-toggle {
+            padding: 7px 12px;
+            background: rgba(255,255,255,0.9);
+            border: 1px solid #ccc;
+            border-radius: 7px;
+            font-size: 85%;
+            cursor: pointer;
+            color: #444;
+            transition: 0.2s;
+        }
+        #reset-btn:hover, #legend-toggle:hover { border-color: #888; background: #f0f0f0; }
 
-        /* ====== الموبايل (أقل من 768px) ====== */
+        /* ===== الـ legend ===== */
+        #legend {
+            position: absolute;
+            bottom: 14px;
+            right: 14px;
+            background: rgba(255,255,255,0.95);
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-size: 85%;
+            z-index: 10;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        #legend h4 { font-size: 90%; margin-bottom: 6px; color: #555; }
+        .legend-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+        .legend-dot { width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0; border: 1px solid rgba(0,0,0,0.1); }
+
+        /* ===== زر الموبايل ===== */
+        #menu-toggle { display: none; }
+
         @media (max-width: 768px) {
-            :root {
-                --title-size: 16px;
-                --legend-size: 11px;
-            }
-
-            /* البانل يغطي الشاشة كلها على الموبايل */
-            #detail-panel {
-                width: 100vw;
-            }
-
-            /* على الموبايل، الـ SVG مبيتحركش لما البانل يفتح (البانل بيلغي فوقه) */
-            svg.with-panel {
-                width: 100vw;
-                margin-left: 0;
-            }
-
-            /* الـ legend يبقى صغير ومضغوط */
-            #legend {
-                top: 46px;
-                right: 10px;
-                padding: 6px 10px;
-                max-height: 30vh;
-            }
-
-            #title {
-                top: 10px;
-                right: 12px;
-                max-width: 70vw;
-            }
-
-            #hint {
-                right: 10px;
-                left: 10px;
-                bottom: 8px;
-                font-size: 10px;
-                text-align: center;
+            body { flex-direction: column; }
+            #infoPanel {
+                width: 100%;
                 max-width: none;
-                width: calc(100vw - 20px);
+                height: 45%;
+                border-left: none;
+                border-top: 1px solid #999;
+                order: 2;
             }
-
-            #detail-panel .detail-title {
-                font-size: 22px;
-            }
-        }
-
-        /* ====== التابلت العمودي (768px - 1024px) ====== */
-        @media (min-width: 769px) and (max-width: 1024px) {
-            :root {
-                --panel-width: 340px;
-            }
-        }
-
-        /* ====== الوضع الأفقي للموبايل ====== */
-        @media (max-width: 768px) and (orientation: landscape) {
-            :root {
-                --panel-width: 320px;
-            }
-
-            #detail-panel {
-                width: 320px;
-            }
+            #graph { height: 55%; order: 1; }
+            #title { font-size: 13px; max-width: 50vw; overflow: hidden; text-overflow: ellipsis; }
+            #menu-toggle { display: block; }
         }
     </style>
 </head>
-
 <body>
+    <!-- السايدبار: محتوى المادة -->
+    <div id="infoPanel">
+        <div id="infoPanel-title">خريطة المواد</div>
+        <div id="infoPanel-body">
+            <div style="text-align:center; color:#888; margin-top:40px; font-size:95%;">
+                👆 اضغط على أي مادة لعرض تفاصيلها
+            </div>
+        </div>
+    </div>
 
-    <div id="title">خريطة مواد كلية الحاسبات ومعلومات</div>
-    <div id="legend"></div>
-    <div id="hint">اضغط على أي مادة لعرض محتواها • مرر الماوس لإبراز العلاقات • اسحب العقدة • عجلة الفأرة للتكبير</div>
+    <!-- الجراف -->
+    <div id="graph">
+        <div id="topbar">
+            <div id="title">خريطة مواد كلية الحاسبات ومعلومات</div>
+            <button id="reset-btn" onclick="resetView()">↺ عرض</button>
+            <button id="legend-toggle" onclick="toggleLegend()">📊 الأقسام</button>
+        </div>
 
-    <svg></svg>
-
-    <!-- البانل الجانبي لعرض محتوى المادة -->
-    <div id="detail-panel">
-        <div id="detail-content"></div>
+        <div id="legend">
+            <h4>الأقسام</h4>
+            <div id="legend-items"></div>
+        </div>
     </div>
 
     <script src="graph.js"></script>
-
 </body>
-
 </html>
