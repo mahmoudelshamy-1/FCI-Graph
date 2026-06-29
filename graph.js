@@ -1,6 +1,6 @@
-// ====== FCI Knowledge Graph (Graphviz + JustinMath style) ======
+// ====== FCI Knowledge Graph (Static Layout with Zoom/Pan) ======
 
-// ألوان باستيل فاتحة زي JustinMath بالظبط
+// ===== ألوان باستيل فاتحة (نفس ألوان JustinMath بدون تغيير) =====
 const COLORS = {
     Year1:  '#ffdbdb',  // أحمر فاتح
     Year2:  '#c9e4ff',  // أزرق فاتح
@@ -19,14 +19,35 @@ const GROUP_LABELS = {
     Shared: 'مواد مشتركة'
 };
 
-let graphData = null;
-let nodeById = {};
-let dotSrc = '';
-let selectedId = null;
+// ===== ثوابت بصرية للعقد والحواف =====
+const NODE_RX = 38;            // نصف قطر أفقي مريح للنصوص
+const NODE_RY = 24;            // نصف قطر رأسي مريح للنصوص
+const EDGE_COLOR = '#888';     // لون الأسهم الافتراضي
+const EDGE_WIDTH = 1.8;        // زيادة سُمك السهم لتحسين الرؤية والقراءة
+
+// ألوان التحديد الموحدة (أصفر / ذهبي لكل المسارات)
+const SELECTED_FILL = '#f6ff4f';     // لون تعبئة المادة المختارة نفسها
+const SELECTED_STROKE = '#d5df1e';   // لون حدود المادة المختارة والمسارات بالكامل
+
+// ===== حدود الـ Zoom المطلوبة =====
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 3;
+
+// ===== متغيرات الحالة العامة =====
+let graphData = null;          
+let nodeById = {};             
+let selectedId = null;         
+let svg = null;                
+let gMain = null;              
+let zoomBehavior = null;       
+let linkSel = null, nodeSel = null; 
+let width = 0, height = 0;     
+let computedNodes = []; // لتخزين العقد بمواضعها الثابتة
 
 // ===== بناء الـ legend =====
 function buildLegend() {
     const box = document.getElementById('legend-items');
+    if (!box) return;
     box.innerHTML = Object.keys(COLORS).map(g =>
         `<div class="legend-row">
             <span class="legend-dot" style="background:${COLORS[g]}"></span>
@@ -35,15 +56,7 @@ function buildLegend() {
     ).join('');
 }
 
-// ===== تحويل النص لآمن لـ Graphviz DOT (escaping) =====
-function esc(s) {
-    return String(s)
-        .replace(/\\/g, '\\\\')
-        .replace(/"/g, '\\"')
-        .replace(/&/g, '&amp;');
-}
-
-// ===== تحويل النص لآمن لـ HTML =====
+// ===== دوال escape =====
 function escHtml(s) {
     return String(s)
         .replace(/&/g, '&amp;')
@@ -51,8 +64,6 @@ function escHtml(s) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;');
 }
-
-// ===== تحويل النص لآمن لـ JavaScript string (onclick) =====
 function escJs(s) {
     return String(s)
         .replace(/\\/g, '\\\\')
@@ -60,84 +71,228 @@ function escJs(s) {
         .replace(/"/g, '\\"');
 }
 
-// ===== طي النص الطويل لسطور متعددة =====
-function wrapLabel(text, maxChars = 18) {
+// ===== طي نص المادة بطريقة ذكية ومتوافقة مع الحروف العربية =====
+function wrapText(text, maxChars) {
     const words = String(text).split(' ');
-    let result = '', line = '';
+    if (text.length <= maxChars || words.length === 1) {
+        return [text];
+    }
+    
+    const lines = [];
+    let line = '';
+    
     for (let w of words) {
         if ((line + ' ' + w).trim().length > maxChars) {
-            result += line.trim() + '\\n';
+            if (line) lines.push(line.trim());
             line = w;
         } else {
             line += ' ' + w;
         }
     }
-    result += line.trim();
-    return result;
-}
-
-// ===== Attributer: ضبط أبعاد الـ SVG (زي JustinMath بالظبط) =====
-function attributer(datum, index, nodes) {
-    if (datum.tag === "svg") {
-        var graphEl = document.getElementById("graph");
-        var width = graphEl.clientWidth || graphEl.offsetWidth || 800;
-        var height = graphEl.clientHeight || graphEl.offsetHeight || 600;
-        datum.attributes.width = width;
-        datum.attributes.height = height;
+    if (line) lines.push(line.trim());
+    
+    if (lines.length > 2) {
+        return [lines[0], lines.slice(1).join(' ')];
     }
+    return lines;
 }
 
-// ===== بناء DOT من graph.json =====
-function buildDot() {
-    const lines = [];
-    // إعدادات الجراف (أتربيوت واحدة في براكيت واحد — صيغة DOT الصحيحة)
-    lines.push('digraph {');
-    lines.push('  graph [rankdir=BT, newrank=true, overlap=false, nodesep=0.4, ranksep=0.9, splines=true, bgcolor="transparent", dpi=72];');
-    lines.push('  node [shape=ellipse, style="filled", fontname="Segoe UI", fontsize=14, fontcolor="#1a1a1a", penwidth=0, color="#333"];');
-    lines.push('  edge [arrowsize=1.2, color="#666", penwidth=1.1];');
+// ===== حساب الترتيب الهرمي الثابت (Rank) =====
+function computeRanks() {
+    const rank = {};
+    graphData.nodes.forEach(n => { rank[n.id] = 0; });
 
-    // العقد
-    graphData.nodes.forEach(n => {
-        const fill = COLORS[n.group] || '#e3e3e3';
-        const label = wrapLabel(n.id);
-        const desc = n.desc ? ` tooltip="${esc(n.desc)}"` : '';
-        lines.push(`  "${esc(n.id)}" [label="${label}", fillcolor="${fill}"${desc}];`);
-    });
-
-    // الروابط
-    graphData.links.forEach(l => {
-        lines.push(`  "${esc(l.source)}" -> "${esc(l.target)}";`);
-    });
-
-    lines.push('}');
-    return lines.join('\n');
-}
-
-// ===== إعادة رسم الجراف =====
-function renderGraph() {
-    dotSrc = buildDot();
-    d3.select("#graph")
-        .graphviz()
-        .attributer(attributer)
-        .transition(function () {
-            return d3.transition().duration(400);
-        })
-        .logEvents(false)
-        .renderDot(dotSrc)
-        .on("end", function () {
-            attachInteractions();
+    let changed = true, iter = 0;
+    while (changed && iter < 200) {
+        changed = false; iter++;
+        graphData.links.forEach(l => {
+            const s = l.source.id || l.source;
+            const t = l.target.id || l.target;
+            if (rank[s] !== undefined && rank[t] !== undefined) {
+                if (rank[s] + 1 > rank[t]) {
+                    rank[t] = rank[s] + 1;
+                    changed = true;
+                }
+            }
         });
+    }
+    return rank;
 }
 
-// ===== ربط التفاعلات بعد الرسم =====
-function attachInteractions() {
-    d3.selectAll('.node').on('click', function () {
-        const title = d3.select(this).select('title').text();
-        selectNode(title);
+// ===== قياس أبعاد منطقة الرسم =====
+function measure() {
+    const graphEl = document.getElementById('graph');
+    width  = graphEl.clientWidth  || graphEl.offsetWidth  || 800;
+    height = graphEl.clientHeight || graphEl.offsetHeight || 600;
+}
+
+// ===== بناء هيكل SVG وخدمات التكبير والسحب التعريفية =====
+function setupSvg() {
+    measure();
+
+    document.getElementById('graph').querySelector('svg')?.remove();
+    svg = d3.select('#graph').append('svg')
+        .attr('width', width)
+        .attr('height', height)
+        .attr('preserveAspectRatio', 'xMidYMid meet');
+
+    const defs = svg.append('defs');
+    
+    // سهم افتراضي رمادي
+    defs.append('marker')
+        .attr('id', 'arrow-default')
+        .attr('viewBox', '0 -5 10 10')
+        .attr('refX', NODE_RX + 7) 
+        .attr('refY', 0)
+        .attr('markerWidth', 6)
+        .attr('markerHeight', 6)
+        .attr('orient', 'auto-start-reverse')
+        .append('path')
+        .attr('d', 'M0,-4L8,0L0,4')
+        .attr('fill', EDGE_COLOR);
+
+    // سهم مبرز للمسارات النشطة باللون الأصفر/الذهبي
+    defs.append('marker')
+        .attr('id', 'arrow-selected')
+        .attr('viewBox', '0 -5 10 10')
+        .attr('refX', NODE_RX + 7)
+        .attr('refY', 0)
+        .attr('markerWidth', 7)
+        .attr('markerHeight', 7)
+        .attr('orient', 'auto-start-reverse')
+        .append('path')
+        .attr('d', 'M0,-4L8,0L0,4')
+        .attr('fill', SELECTED_STROKE);
+
+    gMain = svg.append('g').attr('class', 'g-main');
+    gMain.append('g').attr('class', 'links');
+    gMain.append('g').attr('class', 'nodes');
+
+    zoomBehavior = d3.zoom()
+        .scaleExtent([ZOOM_MIN, ZOOM_MAX])
+        .on('zoom', (event) => {
+            gMain.attr('transform', event.transform);
+        });
+
+    svg.call(zoomBehavior);
+    svg.style('touch-action', 'none');
+}
+
+// ===== تهيئة وحساب الإحداثيات الثابتة تماماً =====
+function prepareData() {
+    const ranks = computeRanks();
+    const maxRank = Math.max(0, ...Object.values(ranks));
+
+    computedNodes = graphData.nodes.map(n => ({
+        id: n.id,
+        group: n.group,
+        desc: n.desc,
+        rank: ranks[n.id] || 0
+    }));
+
+    const idMap = {};
+    computedNodes.forEach(n => { idMap[n.id] = n; });
+
+    const byRank = {};
+    computedNodes.forEach(n => {
+        (byRank[n.rank] = byRank[n.rank] || []).push(n);
+    });
+
+    Object.keys(byRank).forEach(r => {
+        const layer = byRank[r];
+        const xStep = Math.max(140, width / (layer.length + 1));
+        const totalLayerWidth = xStep * (layer.length - 1);
+        const startX = (width - totalLayerWidth) / 2;
+
+        layer.forEach((n, i) => {
+            n.x = startX + (i * xStep);
+            const yStep = Math.max(110, (height - 140) / Math.max(1, maxRank));
+            n.y = 70 + r * yStep;
+        });
+    });
+
+    const links = graphData.links.map(l => {
+        const sId = l.source.id || l.source;
+        const tId = l.target.id || l.target;
+        return {
+            source: idMap[sId],
+            target: idMap[tId],
+            sourceId: sId,
+            targetId: tId
+        };
+    }).filter(l => l.source && l.target);
+
+    return { nodes: computedNodes, links };
+}
+
+// ===== رسم العناصر الثابتة =====
+function renderNodesLinks(nodes, links) {
+    // 1) رسم الروابط
+    linkSel = gMain.select('.links')
+        .selectAll('line')
+        .data(links)
+        .join('line')
+        .attr('stroke', EDGE_COLOR)
+        .attr('stroke-width', EDGE_WIDTH)
+        .attr('marker-end', 'url(#arrow-default)')
+        .attr('fill', 'none')
+        .attr('x1', d => d.source.x)
+        .attr('y1', d => d.source.y)
+        .attr('x2', d => d.target.x)
+        .attr('y2', d => d.target.y);
+
+    // 2) رسم العقد
+    nodeSel = gMain.select('.nodes')
+        .selectAll('g.node')
+        .data(nodes, d => d.id)
+        .join('g')
+        .attr('class', 'node')
+        .style('cursor', 'pointer')
+        .attr('transform', d => `translate(${d.x},${d.y})`);
+
+    nodeSel.append('ellipse')
+        .attr('rx', NODE_RX)
+        .attr('ry', NODE_RY)
+        .attr('fill', d => COLORS[d.group] || '#e3e3e3')
+        .attr('stroke', '#333')
+        .attr('stroke-width', 1.2);
+
+    nodeSel.each(function (d) {
+        const lines = wrapText(d.id, 11);
+        const g = d3.select(this);
+        g.selectAll('text').remove();
+        
+        const fontSize = lines.length > 1 ? 9.5 : 10.5;
+        
+        const txt = g.append('text')
+            .attr('text-anchor', 'middle')
+            .attr('dominant-baseline', 'middle')
+            .attr('font-family', '"Segoe UI", Tahoma, sans-serif')
+            .attr('font-weight', '500')
+            .attr('font-size', fontSize)
+            .attr('fill', '#1a1a1a')
+            .attr('pointer-events', 'none');
+        
+        if (lines.length === 1) {
+            txt.append('tspan').attr('x', 0).attr('y', 0).text(lines[0]);
+        } else {
+            txt.append('tspan').attr('x', 0).attr('y', -6).text(lines[0]);
+            txt.append('tspan').attr('x', 0).attr('y', 8).text(lines[1]);
+        }
+    });
+
+    nodeSel.on('click', function (event, d) {
+        event.stopPropagation();
+        selectNode(d.id);
     });
 }
 
-// ===== تحديد عقدة + إبراز مسار المتطلبات =====
+function renderGraph() {
+    setupSvg();
+    const { nodes, links } = prepareData();
+    renderNodesLinks(nodes, links);
+}
+
 function selectNode(id) {
     selectedId = id;
     const node = nodeById[id];
@@ -147,60 +302,77 @@ function selectNode(id) {
     highlightPath(id);
 }
 
-// ===== إبراز مسار المتطلبات (من الأجداد للمادة) =====
+// ===== تلوين العلاقات السابقة والمستقبلية باللون الأصفر الموحد بنجاح تام وبدون تداخل ألوان =====
 function highlightPath(id) {
-    // إعادة الكل للطبيعي
-    d3.select("#graph svg").selectAll('.node').each(function () {
-        d3.select(this).select('ellipse')
-            .attr('stroke-width', 0)
-            .attr('stroke', '#333');
-    });
-    d3.select("#graph svg").selectAll('.edge').each(function () {
-        d3.select(this).select('path')
-            .attr('stroke', '#666')
-            .attr('stroke-width', 1.1);
-        d3.select(this).select('polygon')
-            .attr('stroke', '#666')
-            .attr('fill', '#666');
-    });
+    if (!nodeSel || !linkSel) return;
 
-    // تجميع كل الأجداد (Prerequisites) صعوداً
-    const ancestors = new Set([id]);
-    const queue = [id];
-    while (queue.length) {
-        const cur = queue.shift();
+    // إعادة تعيين الألوان والحالات للشكل الافتراضي أولاً
+    nodeSel.select('ellipse')
+        .attr('fill', d => COLORS[d.group] || '#e3e3e3')
+        .attr('stroke', '#333')
+        .attr('stroke-width', 1.2);
+    linkSel
+        .attr('stroke', EDGE_COLOR)
+        .attr('stroke-width', EDGE_WIDTH)
+        .attr('marker-end', 'url(#arrow-default)');
+
+    // 1. تجميع المتطلبات السابقة (المواد اللي تدرسها قبلها - صعوداً)
+    const prereqsSet = new Set();
+    const prereqQueue = [id];
+    while (prereqQueue.length) {
+        const cur = prereqQueue.shift();
         graphData.links.forEach(l => {
-            const s = typeof l.source === 'object' ? l.source.id : l.source;
-            const t = typeof l.target === 'object' ? l.target.id : l.target;
-            if (t === cur && !ancestors.has(s)) {
-                ancestors.add(s);
-                queue.push(s);
+            const s = l.source.id || l.source;
+            const t = l.target.id || l.target;
+            if (t === cur && !prereqsSet.has(s)) {
+                prereqsSet.add(s);
+                prereqQueue.push(s);
             }
         });
     }
 
-    // إبراز العقد في المسار
-    d3.select("#graph svg").selectAll('.node').each(function () {
-        const nid = d3.select(this).select('title').text();
-        if (ancestors.has(nid)) {
-            d3.select(this).select('ellipse')
-                .attr('fill', '#f6ff4f')
-                .attr('stroke', '#d4a017')
-                .attr('stroke-width', nid === id ? 3 : 1.5);
-        }
-    });
+    // 2. تجميع المواد المستقبلية (المواد اللي تؤهلك ليها - هبوطاً)
+    const unlocksSet = new Set();
+    const unlockQueue = [id];
+    while (unlockQueue.length) {
+        const cur = unlockQueue.shift();
+        graphData.links.forEach(l => {
+            const s = l.source.id || l.source;
+            const t = l.target.id || l.target;
+            if (s === cur && !unlocksSet.has(t)) {
+                unlocksSet.add(t);
+                unlockQueue.push(t);
+            }
+        });
+    }
 
-    // إبراز حواف المسار
-    d3.select("#graph svg").selectAll('.edge').each(function () {
-        const title = d3.select(this).select('title').text();
-        const [src, tgt] = title.split('->');
-        if (ancestors.has(src.trim()) && ancestors.has(tgt.trim())) {
-            d3.select(this).select('path')
-                .attr('stroke', '#d4a017')
-                .attr('stroke-width', 2.5);
-            d3.select(this).select('polygon')
-                .attr('stroke', '#d4a017')
-                .attr('fill', '#d4a017');
+    // 3. تلوين كل العقد المتصلة بالمسارين (خلفية صفراء خفيفة متناسقة مع لون التحديد)
+    nodeSel.select('ellipse').attr('fill', d => {
+        if (d.id === id) return SELECTED_FILL; // المادة المحددة نفسها
+        if (prereqsSet.has(d.id) || unlocksSet.has(d.id)) return '#f6ff4f'; // لون أصفر خفيف ومريح للعين للمسارات المتصلة
+        return COLORS[d.group] || '#e3e3e3';
+    })
+    .attr('stroke', d => {
+        if (d.id === id || prereqsSet.has(d.id) || unlocksSet.has(d.id)) return SELECTED_STROKE;
+        return '#333';
+    })
+    .attr('stroke-width', d => (d.id === id ? 3 : (prereqsSet.has(d.id) || unlocksSet.has(d.id) ? 2 : 1.2)));
+
+    // 4. تلوين كل الأسهم والروابط باللون الأصفر الموحد
+    linkSel.each(function(d) {
+        const srcId = d.sourceId || (d.source && d.source.id) || d.source;
+        const tgtId = d.targetId || (d.target && d.target.id) || d.target;
+        
+        const line = d3.select(this);
+        
+        // التحقق مما إذا كان السهم يقع ضمن مسار المواد السابقة أو اللاحقة للمادة الحالية
+        const isPrereqPath = (tgtId === id || prereqsSet.has(tgtId)) && prereqsSet.has(srcId);
+        const isUnlockPath = (srcId === id || unlocksSet.has(srcId)) && unlocksSet.has(tgtId);
+
+        if (isPrereqPath || isUnlockPath) {
+            line.attr('stroke', SELECTED_STROKE)
+                .attr('stroke-width', 2.5)
+                .attr('marker-end', 'url(#arrow-selected)'); // تطبيق رأس السهم الأصفر الموحد
         }
     });
 }
@@ -209,13 +381,13 @@ function highlightPath(id) {
 function updateInfoPanel(node) {
     const titleEl = document.getElementById('infoPanel-title');
     const bodyEl = document.getElementById('infoPanel-body');
+    if (!titleEl || !bodyEl) return;
 
-    // المتطلبات السابقة + المواد التالية
     const prereqs = [];
     const unlocks = [];
     graphData.links.forEach(l => {
-        const s = typeof l.source === 'object' ? l.source.id : l.source;
-        const t = typeof l.target === 'object' ? l.target.id : l.target;
+        const s = l.source.id || l.source;
+        const t = l.target.id || l.target;
         if (t === node.id) prereqs.push(s);
         if (s === node.id) unlocks.push(t);
     });
@@ -224,10 +396,9 @@ function updateInfoPanel(node) {
 
     let html = '';
     if (node.desc) {
-        html += `<div id="infoPanel-desc">${node.desc}</div>`;
+        html += `<div id="infoPanel-desc">${escHtml(node.desc)}</div>`;
     }
 
-    // المتطلبات السابقة
     if (prereqs.length) {
         html += `<div class="info-section">
             <div class="info-section-title">⬅️ المتطلبات السابقة</div>
@@ -235,7 +406,6 @@ function updateInfoPanel(node) {
         </div>`;
     }
 
-    // المواد التالية
     if (unlocks.length) {
         html += `<div class="info-section">
             <div class="info-section-title">➡️ يؤهلك لدراسة</div>
@@ -243,7 +413,6 @@ function updateInfoPanel(node) {
         </div>`;
     }
 
-    // محتوى المادة (فاضي دلوقتي — هيتضاف بكره)
     html += `<div class="info-section">
         <div class="info-section-title">📚 محتوى المادة</div>
         <div class="content-empty">سيتم إضافة محتوى هذه المادة قريباً.</div>
@@ -252,33 +421,63 @@ function updateInfoPanel(node) {
     bodyEl.innerHTML = html;
 }
 
-// ===== إعادة ضبط العرض =====
+// ===== إعادة ضبط الجراف الافتراضي والـ Zoom والواجهة =====
 function resetView() {
     selectedId = null;
     renderGraph();
-    document.getElementById('infoPanel-title').innerHTML = 'خريطة المواد';
-    document.getElementById('infoPanel-body').innerHTML =
-        '<div style="text-align:center; color:#888; margin-top:40px;">👆 اضغط على أي مادة لعرض تفاصيلها</div>';
+    if (svg && zoomBehavior) {
+        svg.transition().duration(500).call(zoomBehavior.transform, d3.zoomIdentity);
+    }
+    const titleEl = document.getElementById('infoPanel-title');
+    const bodyEl = document.getElementById('infoPanel-body');
+    if (titleEl) titleEl.innerHTML = 'خريطة المواد';
+    if (bodyEl) {
+        bodyEl.innerHTML =
+            '<div style="text-align:center; color:#888; margin-top:40px;">👆 اضغط على أي مادة لعرض تفاصيلها</div>';
+    }
+}
+
+function zoomIn() {
+    if (svg && zoomBehavior) svg.transition().duration(300).call(zoomBehavior.scaleBy, 1.3);
+}
+function zoomOut() {
+    if (svg && zoomBehavior) svg.transition().duration(300).call(zoomBehavior.scaleBy, 0.7);
 }
 
 function toggleLegend() {
     const lg = document.getElementById('legend');
-    lg.style.display = lg.style.display === 'none' ? 'block' : 'none';
+    if (lg) lg.style.display = lg.style.display === 'none' ? 'block' : 'none';
 }
 
-// ===== البدء =====
+let resizeTimer = null;
+function onResize() {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+        renderGraph();
+        if (selectedId) highlightPath(selectedId);
+    }, 200);
+}
+
 window.selectNode = selectNode;
 window.resetView = resetView;
 window.toggleLegend = toggleLegend;
+window.zoomIn = zoomIn;
+window.zoomOut = zoomOut;
 
 buildLegend();
 
-d3.json("graph.json").then(function (data) {
+window.addEventListener('resize', onResize);
+window.addEventListener('orientationchange', onResize);
+
+d3.json('graph.json').then(function (data) {
     graphData = data;
     data.nodes.forEach(function (n) { nodeById[n.id] = n; });
     renderGraph();
 }).catch(function (err) {
-    document.getElementById('graph').innerHTML =
-        '<div style="padding:40px;color:#c00;">تعذر تحميل graph.json — تأكد من تشغيل السيرفر المحلي</div>';
+    const graphEl = document.getElementById('graph');
+    if (graphEl) {
+        graphEl.innerHTML =
+            '<div style="padding:40px;color:#c00;">تعذر تحميل graph.json — تأكد من تشغيل السيرفر المحلي</div>';
+    }
     console.error(err);
 });

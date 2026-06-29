@@ -6,10 +6,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
     <title>FCI Knowledge Graph</title>
 
-    <!-- Graphviz + D3 (نفس مكتبات JustinMath بالظبط) -->
+    <!-- D3.js فقط (محرك Force Simulation بدل Graphviz) -->
     <script src="https://d3js.org/d3.v7.min.js"></script>
-    <script src="https://unpkg.com/viz.js@1.8.0/viz.js" type="javascript/worker"></script>
-    <script src="https://unpkg.com/d3-graphviz@2.6.1/build/d3-graphviz.min.js"></script>
 
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -127,6 +125,7 @@
             height: 100%;
             cursor: grab;
             display: block;
+            touch-action: none; /* تمكين pinch-zoom و pan عبر d3-zoom على الأجهزة اللمسية */
         }
         #graph svg:active { cursor: grabbing; }
 
@@ -192,7 +191,8 @@
                 border-top: 1px solid #999;
                 order: 2;
             }
-            #graph { height: 55%; order: 1; }
+            #graph { height: 55%; order: 1; min-height: 0; }
+            #graph svg { touch-action: none; } /* تمكين pinch-zoom/pan يدويًا عبر d3 */
             #title { font-size: 13px; max-width: 50vw; overflow: hidden; text-overflow: ellipsis; }
             #menu-toggle { display: block; }
         }
