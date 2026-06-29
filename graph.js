@@ -1,6 +1,5 @@
-// ====== FCI Knowledge Graph (Static Layout with Zoom/Pan) ======
 
-// ===== ألوان باستيل فاتحة (نفس ألوان JustinMath بدون تغيير) =====
+
 const COLORS = {
     Year1:  '#ffdbdb',  // أحمر فاتح
     Year2:  '#c9e4ff',  // أزرق فاتح
